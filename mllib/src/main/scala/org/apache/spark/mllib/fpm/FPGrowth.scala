@@ -49,7 +49,7 @@ import org.apache.spark.storage.StorageLevel
  */
 @Since("1.3.0")
 class FPGrowthModel[Item: ClassTag] @Since("1.3.0") (
-    @Since("1.3.0") val freqItemsets: RDD[FreqItemset[Item]])
+    @Since("1.3.0") val freqItemsets: RDD[FreqItemset[Item]], val freqItems: RDD[(Item, Int)], val totalItemCount: Long)
   extends Saveable with Serializable {
   /**
    * Generates association rules for the [[Item]]s in [[freqItemsets]].
@@ -58,7 +58,7 @@ class FPGrowthModel[Item: ClassTag] @Since("1.3.0") (
   @Since("1.5.0")
   def generateAssociationRules(confidence: Double): RDD[AssociationRules.Rule[Item]] = {
     val associationRules = new AssociationRules(confidence)
-    associationRules.run(freqItemsets)
+    associationRules.run(freqItemsets, freqItems, totalItemCount)
   }
 
   /**
@@ -140,7 +140,14 @@ object FPGrowthModel extends Loader[FPGrowthModel[_]] {
         val freq = x.getLong(1)
         new FreqItemset(items, freq)
       }
-      new FPGrowthModel(freqItemsetsRDD)
+      
+      val freqItemsRDD = freqItemsets.select("items", "freq").rdd.map { x =>
+        val items = x.getAs[Seq[Item]](0).toArray
+        val freq = x.getInt(1)
+        (items(0), freq)
+      }
+      
+      new FPGrowthModel(freqItemsetsRDD, freqItemsRDD, 0)
     }
   }
 }
@@ -214,8 +221,8 @@ class FPGrowth private (
     val numParts = if (numPartitions > 0) numPartitions else data.partitions.length
     val partitioner = new HashPartitioner(numParts)
     val freqItems = genFreqItems(data, minCount, partitioner)
-    val freqItemsets = genFreqItemsets(data, minCount, freqItems, partitioner)
-    new FPGrowthModel(freqItemsets)
+    val freqItemsets = genFreqItemsets(data, minCount, freqItems.collect().map(_._1), partitioner)
+    new FPGrowthModel(freqItemsets, freqItems, count)
   }
 
   /** Java-friendly version of [[run]]. */
@@ -229,12 +236,12 @@ class FPGrowth private (
    * Generates frequent items by filtering the input data using minimal support level.
    * @param minCount minimum count for frequent itemsets
    * @param partitioner partitioner used to distribute items
-   * @return array of frequent pattern ordered by their frequencies
+   * @return array of frequent pattern and its frequency ordered by their frequencies
    */
   private def genFreqItems[Item: ClassTag](
       data: RDD[Array[Item]],
       minCount: Long,
-      partitioner: Partitioner): Array[Item] = {
+      partitioner: Partitioner): RDD[(Item, Int)] = {
     data.flatMap { t =>
       val uniq = t.toSet
       if (t.length != uniq.size) {
@@ -242,11 +249,11 @@ class FPGrowth private (
       }
       t
     }.map(v => (v, 1L))
-      .reduceByKey(partitioner, _ + _)
-      .filter(_._2 >= minCount)
-      .collect()
-      .sortBy(-_._2)
-      .map(_._1)
+     .reduceByKey(partitioner, _ + _)
+     .filter(_._2 >= minCount)
+     //.collect()
+     .sortBy(-_._2)
+     .map(x => (x._1, x._2.toInt))
   }
 
   /**

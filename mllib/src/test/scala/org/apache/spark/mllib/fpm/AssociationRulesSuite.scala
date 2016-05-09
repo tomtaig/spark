@@ -23,22 +23,21 @@ class AssociationRulesSuite extends SparkFunSuite with MLlibTestSparkContext {
 
   test("association rules using String type") {
     val freqItemsets = sc.parallelize(Seq(
-      (Set("s"), 3L), (Set("z"), 5L), (Set("x"), 4L), (Set("t"), 3L), (Set("y"), 3L),
-      (Set("r"), 3L),
-      (Set("x", "z"), 3L), (Set("t", "y"), 3L), (Set("t", "x"), 3L), (Set("s", "x"), 3L),
-      (Set("y", "x"), 3L), (Set("y", "z"), 3L), (Set("t", "z"), 3L),
-      (Set("y", "x", "z"), 3L), (Set("t", "x", "z"), 3L), (Set("t", "y", "z"), 3L),
-      (Set("t", "y", "x"), 3L),
-      (Set("t", "y", "x", "z"), 3L)
-    ).map {
-      case (items, freq) => new FPGrowth.FreqItemset(items.toArray, freq)
-    })
+      Array("r", "z", "h", "k", "p"),
+      Array("z", "y", "x", "w", "v", "u", "t", "s"),
+      Array("s", "x", "o", "n", "r"),
+      Array("x", "z", "y", "m", "t", "s", "q", "e"),
+      Array("z"),
+      Array("x", "z", "y", "r", "q", "t", "p")
+    ));
 
-    val ar = new AssociationRules()
+    val fpg = new FPGrowth()
 
-    val results1 = ar
-      .setMinConfidence(0.9)
+    val results1 = fpg
+      .setMinSupport(0)
+      .setNumPartitions(1)
       .run(freqItemsets)
+      .generateAssociationRules(0.9)
       .collect()
 
     /* Verify results using the `R` code:
@@ -65,9 +64,11 @@ class AssociationRulesSuite extends SparkFunSuite with MLlibTestSparkContext {
     assert(results1.size === 23)
     assert(results1.count(rule => math.abs(rule.confidence - 1.0D) < 1e-6) == 23)
 
-    val results2 = ar
-      .setMinConfidence(0)
+    val results2 = fpg
+      .setMinSupport(0)
+      .setNumPartitions(1)
       .run(freqItemsets)
+      .generateAssociationRules(0)
       .collect()
 
     /* Verify results using the `R` code:

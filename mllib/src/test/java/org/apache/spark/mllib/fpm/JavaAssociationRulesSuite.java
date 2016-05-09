@@ -23,6 +23,8 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import scala.Tuple2;
+
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.mllib.fpm.FPGrowth.FreqItemset;
@@ -50,8 +52,14 @@ public class JavaAssociationRulesSuite implements Serializable {
       new FreqItemset<String>(new String[] {"b"}, 35L),
       new FreqItemset<String>(new String[] {"a", "b"}, 12L)
     ));
-
-    JavaRDD<AssociationRules.Rule<String>> results = (new AssociationRules()).run(freqItemsets);
+ 
+    @SuppressWarnings("unchecked")
+    JavaRDD<Tuple2<String, Integer>> freqItems = sc.parallelize(Arrays.asList(
+      new Tuple2<String, Integer>("a", 15),
+      new Tuple2<String, Integer>("b", 35)
+    ));
+    
+    JavaRDD<AssociationRules.Rule<String>> results = (new AssociationRules()).run(freqItemsets, freqItems, 3L);
   }
 }
 

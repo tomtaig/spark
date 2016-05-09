@@ -59,35 +59,43 @@ class AssociationRules private[fpm] (
   /**
    * Computes the association rules with confidence above [[minConfidence]].
    * @param freqItemsets frequent itemset model obtained from [[FPGrowth]]
+   * @param frequencies item frequency counts for the entire item set
+   * @param itemCount the count of all the itemsets
    * @return a [[Set[Rule[Item]]] containing the association rules.
    *
    */
   @Since("1.5.0")
-  def run[Item: ClassTag](freqItemsets: RDD[FreqItemset[Item]]): RDD[Rule[Item]] = {
+  def run[Item: ClassTag](freqItemsets: RDD[FreqItemset[Item]], frequencies: RDD[(Item, Int)], itemCount: Long): RDD[Rule[Item]] = {
+
     // For candidate rule X => Y, generate (X, (Y, freq(X union Y)))
     val candidates = freqItemsets.flatMap { itemset =>
-      val items = itemset.items
-      items.flatMap { item =>
-        items.partition(_ == item) match {
-          case (consequent, antecedent) if !antecedent.isEmpty =>
-            Some((antecedent.toSeq, (consequent.toSeq, itemset.freq)))
-          case _ => None
+        val items = itemset.items
+        items.flatMap { item =>
+            items.partition(item2 => item2 == item) match {
+              case (consequent, antecedent) if !antecedent.isEmpty => Some((antecedent.toSeq, (consequent.toSeq, itemset.freq)))
+              case item2 => None
+            }
         }
-      }
     }
 
-    // Join to get (X, ((Y, freq(X union Y)), freq(X))), generate rules, and filter by confidence
-    candidates.join(freqItemsets.map(x => (x.items.toSeq, x.freq)))
-      .map { case (antecendent, ((consequent, freqUnion), freqAntecedent)) =>
-      new Rule(antecendent.toArray, consequent.toArray, freqUnion, freqAntecedent)
-    }.filter(_.confidence >= minConfidence)
+    // generate (X, (((Y, freq(X union Y)), freq(X)), freq(Y')))
+    candidates
+        .join(freqItemsets.map(x => (x.items.toSeq, x.freq)))
+        .map { case (antecedent, ((consequent, freqUnion), freqAntecedent)) =>
+            (consequent, ((antecedent, freqUnion), freqAntecedent))
+        }
+        .join(frequencies.map(item => (Seq(item._1), item._2)))
+        .map { case (consequent, (((antecedent, freqUnion), freqAntecedent), freqConsequent)) =>
+            new Rule(antecedent.toArray, consequent.toArray, freqAntecedent.toInt, freqUnion.toInt, freqConsequent.toDouble, itemCount)
+        }
+        .filter(_.confidence >= minConfidence)
   }
 
   /** Java-friendly version of [[run]]. */
   @Since("1.5.0")
-  def run[Item](freqItemsets: JavaRDD[FreqItemset[Item]]): JavaRDD[Rule[Item]] = {
+  def run[Item](freqItemsets: JavaRDD[FreqItemset[Item]], frequencies: JavaRDD[(Item, Int)], totalItemCount: Long): JavaRDD[Rule[Item]] = {
     val tag = fakeClassTag[Item]
-    run(freqItemsets.rdd)(tag)
+    run(freqItemsets.rdd, frequencies.rdd, totalItemCount)(tag)
   }
 }
 
@@ -102,6 +110,7 @@ object AssociationRules {
    *                   instead.
    * @param consequent conclusion of the rule. Java users should call [[Rule#javaConsequent]]
    *                   instead.
+   * @param totalItemCount the count of all the itemsets
    * @tparam Item item type
    *
    */
@@ -111,7 +120,9 @@ object AssociationRules {
       @Since("1.5.0") val antecedent: Array[Item],
       @Since("1.5.0") val consequent: Array[Item],
       freqUnion: Double,
-      freqAntecedent: Double) extends Serializable {
+      freqAntecedent: Double,
+      freqConsequent: Double,
+      totalItemCount: Long) extends Serializable {
 
     /**
      * Returns the confidence of the rule.
@@ -120,6 +131,12 @@ object AssociationRules {
     @Since("1.5.0")
     def confidence: Double = freqUnion.toDouble / freqAntecedent
 
+    /**
+     * Returns the lift of the rule.
+     *
+     */
+    def lift: Double = confidence / (freqConsequent / totalItemCount.toDouble)
+    
     require(antecedent.toSet.intersect(consequent.toSet).isEmpty, {
       val sharedItems = antecedent.toSet.intersect(consequent.toSet)
       s"A valid association rule must have disjoint antecedent and " +
@@ -146,7 +163,7 @@ object AssociationRules {
 
     override def toString: String = {
       s"${antecedent.mkString("{", ",", "}")} => " +
-        s"${consequent.mkString("{", ",", "}")}: ${confidence}"
+        s"${consequent.mkString("{", ",", "}")}: ${freqAntecedent} ${freqUnion} ${freqConsequent} ${confidence} ${lift}"
     }
   }
 }
